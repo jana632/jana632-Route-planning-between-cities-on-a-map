@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A* Route Planner – Egypt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f3ede0;--panel:#fffaf0;--ink:#16302f;--mute:#6b7a76;--sea:#cfe3e0;--land:#eadfc4;--road:#b9ab88;
+--explored:#e0a526;--front:#2b6fb3;--path:#c8372d;--line:#d9ccaa}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0e1f21;--panel:#152b2d;--ink:#eee6d2;--mute:#8fa5a0;--sea:#0b191b;--land:#1d3a39;--road:#3b5c58;--explored:#e8b23a;--front:#5aa3e6;--path:#ff6a5c;--line:#244544}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:"Bricolage Grotesque",system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:20px;line-height:1.4}
+h1{font-size:clamp(1.6rem,3vw,2.3rem);margin:0 0 4px;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--mute);margin:0 0 18px;max-width:60ch}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;max-width:1100px;margin:auto}
+@media(max-width:850px){.app{grid-template-columns:1fr}}
+.map{background:var(--sea);border-radius:16px;border:1px solid var(--line);overflow:hidden}
+svg{display:block;width:100%;height:auto;max-height:80vh}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+label{font-size:.85rem;color:var(--mute);display:block;margin-bottom:3px}
+select,button{font:inherit;width:100%;padding:9px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+button{cursor:pointer;font-weight:600;background:var(--ink);color:var(--bg);border:0}
+button:focus-visible,select:focus-visible{outline:3px solid var(--front);outline-offset:2px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.chk{display:flex;gap:8px;align-items:center;font-size:.9rem}.chk input{width:auto}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--bg);border-radius:10px;padding:8px 10px}
+.stat b{display:block;font-size:1.35rem;font-weight:800}.stat span{font-size:.8rem;color:var(--mute)}
+#route{font-weight:600}
+#log{font-size:.82rem;color:var(--mute);height:130px;overflow:auto;border-top:1px solid var(--line);padding-top:8px;margin:0;list-style:none}
+#log li{margin-bottom:3px}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:.8rem;color:var(--mute)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+.edge{stroke:var(--road);stroke-width:2;stroke-linecap:round}
+.edge.on{stroke:var(--explored);stroke-width:3}
+.edge.path{stroke:var(--path);stroke-width:5}
+.node circle{fill:var(--panel);stroke:var(--ink);stroke-width:2;transition:fill .2s}
+.node.closed circle{fill:var(--explored)}
+.node.front circle{stroke:var(--front);stroke-width:4}
+.node.path circle{fill:var(--path);stroke:var(--path)}
+.node text{font-size:11px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--land);stroke-width:3px}
+.node{cursor:pointer}
+.w{font-size:9px;fill:var(--mute);text-anchor:middle}
+</style>
+</head>
+<body>
+<h1>A* route planner: Egypt</h1>
+<p class="sub">Pick a start and a goal city (or click two cities on the map). Watch A* decide which cities to explore, using straight-line distance as its guide.</p>
+<div class="app">
+  <div class="map"><svg id="svg" viewBox="0 0 600 740" role="img" aria-label="Map of Egyptian cities and roads"></svg></div>
+  <div class="panel">
+    <div class="row">
+      <div><label for="s">Start</label><select id="s"></select></div>
+      <div><label for="g">Goal</label><select id="g"></select></div>
+    </div>
+    <label class="chk"><input type="checkbox" id="h" checked> Use heuristic (uncheck for uniform-cost search)</label>
+    <button id="run">Find route</button>
+    <div class="legend">
+      <span><i style="background:var(--explored)"></i>explored</span>
+      <span><i style="background:var(--front)"></i>frontier</span>
+      <span><i style="background:var(--path)"></i>final route</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="st-found">–</b><span>solution found</span></div>
+      <div class="stat"><b id="st-cost">–</b><span>route cost (km)</span></div>
+      <div class="stat"><b id="st-exp">–</b><span>nodes explored</span></div>
+      <div class="stat"><b id="st-cmp">–</b><span>explored without heuristic</span></div>
+    </div>
+    <div id="route">Choose two cities to begin.</div>
+    <ul id="log" aria-live="polite"></ul>
+  </div>
+</div>
+
+<script>
+/* ---------- Problem definition ----------
+ State   : the city the agent is currently in
+ Initial : the start city      Goal : the destination city
+ Actions : drive along a road to a directly connected neighbouring city
+ Cost    : road distance in km (straight-line distance x 1.2 road factor)
+ Heuristic h(n): straight-line (haversine) distance from n to the goal */
+const CITIES = [
+ ["Alexandria",31.20,29.92],["Marsa Matrouh",31.35,27.24],["Damanhur",31.03,30.47],
+ ["Tanta",30.79,31.00],["Mansoura",31.04,31.38],["Damietta",31.42,31.81],
+ ["Port Said",31.27,32.30],["Zagazig",30.59,31.50],["Ismailia",30.60,32.27],
+ ["Suez",29.97,32.55],["Cairo",30.04,31.24],["10th of Ramadan",30.29,31.75],
+ ["Ain Sokhna",29.60,32.32],["Fayoum",29.31,30.84],["Beni Suef",29.07,31.10],
+ ["Minya",28.11,30.75],["Asyut",27.18,31.19],["Sohag",26.56,31.70],
+ ["Qena",26.16,32.72],["Luxor",25.69,32.64],["Aswan",24.09,32.90],["Hurghada",27.26,33.81]
+].map(([name,lat,lon])=>({name,lat,lon}));
+const ID = Object.fromEntries(CITIES.map((c,i)=>[c.name,i]));
+const ROADS = [
+ ["Alexandria","Marsa Matrouh"],["Alexandria","Damanhur"],["Alexandria","Cairo"],["Damanhur","Tanta"],
+ ["Tanta","Cairo"],["Tanta","Mansoura"],["Mansoura","Damietta"],["Damietta","Port Said"],
+ ["Mansoura","Zagazig"],["Zagazig","Cairo"],["Zagazig","10th of Ramadan"],["10th of Ramadan","Cairo"],
+ ["10th of Ramadan","Ismailia"],["Zagazig","Ismailia"],["Ismailia","Port Said"],["Ismailia","Suez"],
+ ["Cairo","Suez"],["Cairo","Ain Sokhna"],["Suez","Ain Sokhna"],["Ain Sokhna","Hurghada"],
+ ["Cairo","Fayoum"],["Cairo","Beni Suef"],["Fayoum","Beni Suef"],["Beni Suef","Minya"],
+ ["Minya","Asyut"],["Asyut","Sohag"],["Sohag","Qena"],["Qena","Luxor"],["Luxor","Aswan"],["Qena","Hurghada"]
+].map(([a,b])=>[ID[a],ID[b]]);
+
+function km(a,b){ // haversine
+  const R=6371,r=Math.PI/180,A=CITIES[a],B=CITIES[b];
+  const dLat=(B.lat-A.lat)*r,dLon=(B.lon-A.lon)*r;
+  const x=Math.sin(dLat/2)**2+Math.cos(A.lat*r)*Math.cos(B.lat*r)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+const ROAD_FACTOR=1.2; // roads are never shorter than a straight line => heuristic is admissible
+const ADJ=CITIES.map(()=>[]);
+const EDGES=ROADS.map(([a,b])=>{const w=Math.round(km(a,b)*ROAD_FACTOR);ADJ[a].push([b,w]);ADJ[b].push([a,w]);return{a,b,w}});
+
+/* ---------- A* ---------- */
+function astar(start,goal,useH){
+  const h=n=>useH?km(n,goal):0;
+  const g={[start]:0},parent={},closed=new Set(),open=[{n:start,f:h(start)}],steps=[];
+  while(open.length){
+    open.sort((x,y)=>x.f-y.f);
+    const {n}=open.shift();
+    if(closed.has(n))continue;
+    closed.add(n);
+    steps.push({n,g:g[n],h:h(n),from:parent[n],front:[...new Set(open.map(o=>o.n))].filter(x=>!closed.has(x))});
+    if(n===goal){
+      const path=[];for(let c=goal;c!==undefined;c=parent[c])path.unshift(c);
+      return{found:true,path,cost:g[goal],steps};
+    }
+    for(const [m,w] of ADJ[n]){
+      const ng=g[n]+w;
+      if(ng<(g[m]??Infinity)){g[m]=ng;parent[m]=n;open.push({n:m,f:ng+h(m)});}
+    }
+  }
+  return{found:false,path:[],cost:0,steps};
+}
+
+/* ---------- Drawing ---------- */
+const NS="http://www.w3.org/2000/svg",svg=document.getElementById("svg"),K=88,cos=Math.cos(28*Math.PI/180);
+CITIES.forEach(c=>{c.x=24+(c.lon-26.9)*cos*K+10;c.y=30+(32-c.lat)*K*0.9});
+const el=(t,a,p=svg)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p.appendChild(e);return e};
+const bg=el("rect",{width:600,height:740,fill:"var(--land)",opacity:.0});
+const edgeEl=EDGES.map(e=>{
+  const A=CITIES[e.a],B=CITIES[e.b];
+  const l=el("line",{x1:A.x,y1:A.y,x2:B.x,y2:B.y,class:"edge"});
+  return l;
+});
+const nodeEl=CITIES.map((c,i)=>{
+  const g=el("g",{class:"node",transform:`translate(${c.x},${c.y})`,tabindex:0,role:"button","aria-label":c.name});
+  el("circle",{r:7},g);
+  const t=el("text",{x:11,y:4},g);t.textContent=c.name;
+  g.addEventListener("click",()=>pick(i));
+  g.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();pick(i)}});
+  return g;
+});
+/* labels on the east edge would clip: flip them */
+CITIES.forEach((c,i)=>{if(c.x>470){const t=nodeEl[i].querySelector("text");t.setAttribute("x",-11);t.setAttribute("text-anchor","end")}});
+
+/* ---------- UI ---------- */
+const $=id=>document.getElementById(id),selS=$("s"),selG=$("g");
+CITIES.forEach((c,i)=>{selS.add(new Option(c.name,i));selG.add(new Option(c.name,i))});
+selS.value=ID["Alexandria"];selG.value=ID["Aswan"];
+let nextPick="s",timer=null;
+function pick(i){
+  (nextPick==="s"?selS:selG).value=i;nextPick=nextPick==="s"?"g":"s";
+  if(nextPick==="s")run();else mark();
+}
+function mark(){nodeEl.forEach((n,i)=>{n.classList.toggle("path",i==selS.value||i==selG.value)})}
+function reset(){
+  clearTimeout(timer);
+  edgeEl.forEach(e=>e.setAttribute("class","edge"));
+  nodeEl.forEach(n=>n.setAttribute("class","node"));
+  ["found","cost","exp","cmp"].forEach(k=>$("st-"+k).textContent="–");
+  $("log").innerHTML="";$("route").textContent="";
+}
+function edgeIdx(a,b){return EDGES.findIndex(e=>(e.a===a&&e.b===b)||(e.a===b&&e.b===a))}
+function log(t){const li=document.createElement("li");li.textContent=t;const L=$("log");L.appendChild(li);L.scrollTop=L.scrollHeight}
+
+function run(){
+  reset();
+  const s=+selS.value,g=+selG.value,useH=$("h").checked;
+  if(s===g){$("route").textContent="Start and goal are the same city.";mark();return}
+  const res=astar(s,g,useH),base=astar(s,g,false); // baseline: no heuristic
+  $("st-cmp").textContent=base.steps.length;
+  let i=0;
+  (function tick(){
+    if(i<res.steps.length){
+      const st=res.steps[i++];
+      nodeEl.forEach(n=>n.classList.remove("front"));
+      st.front.forEach(f=>nodeEl[f].classList.add("front"));
+      nodeEl[st.n].classList.add("closed");
+      if(st.from!==undefined)edgeEl[edgeIdx(st.from,st.n)].classList.add("on");
+      $("st-exp").textContent=i;
+      log(`Expand ${CITIES[st.n].name}: g=${Math.round(st.g)}, h=${Math.round(st.h)}, f=${Math.round(st.g+st.h)}`);
+      timer=setTimeout(tick,useH?380:200);
+    }else finish();
+  })();
+  function finish(){
+    nodeEl.forEach(n=>n.classList.remove("front"));
+    $("st-found").textContent=res.found?"Yes":"No";
+    if(!res.found){$("route").textContent="No route exists between these cities.";return}
+    $("st-cost").textContent=res.cost;
+    $("route").textContent=res.path.map(p=>CITIES[p].name).join(" → ");
+    res.path.forEach((p,k)=>{nodeEl[p].classList.add("path");if(k)edgeEl[edgeIdx(res.path[k-1],p)].setAttribute("class","edge path")});
+    log(`Goal reached. Cost ${res.cost} km, ${res.steps.length} nodes explored.`);
+  }
+}
+$("run").onclick=run;selS.onchange=selG.onchange=()=>{reset();mark()};
+$("h").onchange=run;
+mark();
+</script>
+</body>
+</html>
